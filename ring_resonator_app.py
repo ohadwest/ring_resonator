@@ -299,73 +299,106 @@ if "1." in calc_mode:
                $$a = t \\iff Q_i = Q_c$$
                במצב זה $T(\\lambda_0) = 0$ והיחס $E_r \\to \\infty\\ \\text{dB}$.
             """)
-
 # ==============================================================================
-# אפשרות 2: חישוב ספקטרום רחב
+# אפשרות 2: חישוב ספקטרום רחב (All-Pass & Add-Drop)
 # ==============================================================================
 else:
-    col_side2, col_main2 = st.columns([1, 2.5], gap="large")
+    col_side2, col_main2 = st.columns([1.2, 2.5], gap="large")
     
     with col_side2:
-        st.subheader("🌐 טווח ספקטרלי וגיאומטריה")
-        wl_min = st.number_input("אורך גל התחלתי λ_min (nm):", value=1500.0, step=5.0)
-        wl_max = st.number_input("אורך גל סופי λ_max (nm):", value=1600.0, step=5.0)
+        st.subheader("🌐 טווח וגיאומטריה")
+        arch_type = st.radio("ארכיטקטורת רזונטור:", ["All-Pass (Bus-Ring)", "Add-Drop (Two Buses)"])
+        
+        col_w1, col_w2 = st.columns(2)
+        wl_min = col_w1.number_input("λ_min (nm):", value=1545.0, step=1.0)
+        wl_max = col_w2.number_input("λ_max (nm):", value=1555.0, step=1.0)
         
         R_um2 = st.number_input("רדיוס R (μm):", value=10.0, step=1.0, key="r2")
         ng2 = st.number_input("מקדם קבוצתי n_g:", value=4.0, step=0.01, key="ng2")
-        neff2 = st.number_input("מקדם אפקטיבי n_eff (ב-1550nm):", value=2.4, step=0.01, key="neff2")
+        neff2 = st.number_input("מקדם אפקטיבי n_eff (ב-1550):", value=2.4, step=0.01, key="neff2")
         
         st.divider()
         st.subheader("📉 הפסדים וצימוד")
         alpha_db2 = st.number_input("הפסד ליניארי α (dB/cm):", value=2.0, step=0.5)
         
-        st.markdown("**תלות מקדם הצימוד בגל $\\kappa(\\lambda)$:**")
-        kappa0 = st.number_input("מקדם צימוד מרכזי κ₀ (ב-1550nm):", value=0.15, min_value=0.01, max_value=0.9, step=0.01)
-        dkappa_dwl = st.number_input("שיפוע דיספרסיה dκ/dλ (1/μm):", value=0.0, step=0.01, help="השאר 0 לקאפה קבוע")
+        col_k1, col_k2 = st.columns(2)
+        kappa1 = col_k1.number_input("צימוד Input (κ₁):", value=0.15, min_value=0.01, max_value=0.99, step=0.01)
         
-        st.divider()
-        add_noise = st.checkbox("כלול 0.5% רעש קיטוב אורתוגונלי (Unresonant Background)", value=True)
+        if "Add-Drop" in arch_type:
+            kappa2 = col_k2.number_input("צימוד Drop (κ₂):", value=0.15, min_value=0.01, max_value=0.99, step=0.01)
+        else:
+            kappa2 = 0.0 # בארכיטקטורת All-Pass אין צימוד יציאה
+            
+        dkappa_dwl = st.number_input("שיפוע דיספרסיית צימוד dκ/dλ (1/μm):", value=0.0, step=0.01, help="השאר 0 לקאפה קבוע")
+        add_noise = st.checkbox("כלול 0.5% רעש קיטוב אורתוגונלי", value=True)
 
     with col_main2:
         st.subheader("📊 ספקטרום תמסורת רחב")
         
+        # בניית וקטור התדרים כדי לשמור על FSR מדויק
         wls = np.linspace(wl_min, wl_max, 5000) # nm
-        L_cm2 = 2 * np.pi * (R_um2 * 1e-4)
+        c = 299792458.0 # m/s
+        f = c / (wls * 1e-9)
+        f0 = c / (1550e-9)
         
-        # חישוב אוקסיד/הפסד
-        alpha_cm2 = alpha_db2 / 4.343
-        a2 = np.exp(-alpha_cm2 * L_cm2 / 2)
+        L_m = 2 * np.pi * (R_um2 * 1e-6) # היקף במטרים
         
-        # תלות קאפה
-        kappa_lambda = kappa0 + dkappa_dwl * (wls - 1550.0) * 1e-3
-        kappa_lambda = np.clip(kappa_lambda, 0.01, 0.99)
-        t_lambda = np.sqrt(1 - kappa_lambda**2)
+        # חישוב פאזה מתוקן (כולל דיספרסיית הפאזה דרך n_g)
+        phi0 = 2 * np.pi * neff2 * L_m / 1550e-9
+        phi = phi0 + (2 * np.pi * ng2 * L_m / c) * (f - f0)
         
-        # פאזה
-        phi = 2 * np.pi * neff2 * (L_cm2 * 1e4) / wls
+        # חישוב הפסדים
+        alpha_m = (alpha_db2 / 4.343) * 100 # dB/cm -> 1/m
+        a = np.exp(-alpha_m * L_m / 2)      # Single roundtrip amplitude
         
-        # תמסורת
-        T_broad = (a2**2 - 2*a2*t_lambda*np.cos(phi) + t_lambda**2) / (1 - 2*a2*t_lambda*np.cos(phi) + (a2*t_lambda)**2)
+        # מקדמי צימוד תלויי אורך גל
+        k1_lambda = np.clip(kappa1 + dkappa_dwl * (wls - 1550) * 1e-3, 0.001, 0.999)
+        t1 = np.sqrt(1 - k1_lambda**2)
         
-        if add_noise:
-            T_broad = 0.995 * T_broad + 0.005
+        if "Add-Drop" in arch_type:
+            k2_lambda = np.clip(kappa2 + dkappa_dwl * (wls - 1550) * 1e-3, 0.001, 0.999)
+            t2 = np.sqrt(1 - k2_lambda**2)
             
-        T_db = 10 * np.log10(np.maximum(1e-5, T_broad))
+            # משוואות Add-Drop
+            T_thru = (t1**2 - 2*a*t1*t2*np.cos(phi) + (a*t2)**2) / (1 - 2*a*t1*t2*np.cos(phi) + (a*t1*t2)**2)
+            T_drop = (k1_lambda**2 * k2_lambda**2 * a) / (1 - 2*a*t1*t2*np.cos(phi) + (a*t1*t2)**2)
+        else:
+            # משוואות All-Pass
+            t2 = 1.0
+            T_thru = (a**2 - 2*a*t1*np.cos(phi) + t1**2) / (1 - 2*a*t1*np.cos(phi) + (a*t1)**2)
+            T_drop = np.zeros_like(T_thru)
+
+        # רעש רקע (כפי שביקשת)
+        if add_noise:
+            T_thru = 0.995 * T_thru + 0.005
+            if "Add-Drop" in arch_type:
+                T_drop = 0.995 * T_drop + 0.0001 # ב-Drop יש מעט זליגה מרחבית
+                
+        T_thru_db = 10 * np.log10(np.maximum(1e-7, T_thru))
         
-        fig_broad, ax_b = plt.subplots(figsize=(9, 4.5), dpi=150)
-        plt.style.use('dark_background')
+        # שרטוט הגרף
+        fig_broad, ax_b = plt.subplots(figsize=(10, 4.5), dpi=150)
         fig_broad.patch.set_facecolor('#0F172A')
         ax_b.set_facecolor('#0F172A')
         
-        ax_b.plot(wls, T_db, color='#38BDF8', linewidth=1.5)
+        ax_b.plot(wls, T_thru_db, color='#38BDF8', linewidth=1.5, label='Through Port')
+        
+        if "Add-Drop" in arch_type:
+            T_drop_db = 10 * np.log10(np.maximum(1e-7, T_drop))
+            ax_b.plot(wls, T_drop_db, color='#F43F5E', linewidth=1.5, label='Drop Port')
+            
         ax_b.set_xlabel("Wavelength λ (nm)", color='#94A3B8', fontweight='bold')
         ax_b.set_ylabel("Transmission (dB)", color='#94A3B8', fontweight='bold')
         ax_b.grid(True, color='#334155', linestyle=':', alpha=0.6)
+        ax_b.legend(facecolor='#1E293B', edgecolor='#334155', labelcolor='#F8FAFC')
         
         st.pyplot(fig_broad)
         
-        # חישוב FSR תיאורטי
+        # חישובי אקסטרפולציה ותיאוריה למשתמש
         lambda_mid = (wl_min + wl_max) / 2.0
-        fsr_nm = (lambda_mid**2) / (ng2 * (L_cm2 * 1e7))
+        fsr_nm = (lambda_mid**2) / (ng2 * (L_m * 1e9)) # FSR בננומטרים
+        fsr_ghz = c / (ng2 * L_m) * 1e-9               # FSR ב-GHz
         
-        st.success(f"💡 **FSR מחושב סביב {lambda_mid:.0f}nm:** {fsr_nm:.3f} nm ({3e8 / (lambda_mid*1e-9)**2 * (fsr_nm*1e-9) * 1e-9:.2f} GHz)")
+        st.success(f"💡 **נתונים תיאורטיים למבנה זה:** \n"
+                   f"**FSR (Free Spectral Range):** {fsr_nm:.3f} nm  |  {fsr_ghz:.2f} GHz  \n"
+                   f"**L (היקף הטבעת):** {L_m*1e6:.2f} μm")
